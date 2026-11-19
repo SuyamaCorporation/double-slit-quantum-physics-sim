@@ -1,0 +1,257 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>二重スリット量子干渉縞物理シミュレーション</title>
+<script src="https://cdn.tailwindcss.com"></script>
+<style>
+  body { background: #060610; color: #dde8ff; font-family: 'Segoe UI', sans-serif; }
+  canvas { display: block; }
+  input[type=range] { accent-color: #818cf8; width: 100%; }
+  .panel { background: #0a0a18; border: 1px solid #1e2040; border-radius: 8px; }
+  .wavelength-bar { height: 12px; border-radius: 3px; }
+</style>
+</head>
+<body class="min-h-screen flex flex-col items-center py-6 px-4">
+  <h1 class="text-2xl font-bold mb-1 text-indigo-300">二重スリット量子干渉縞シミュレーション</h1>
+  <p class="text-sm text-indigo-400 mb-4">ヤングの二重スリット実験：光の干渉縞を数値演算で再現</p>
+
+  <div class="flex flex-col lg:flex-row gap-5 w-full max-w-5xl">
+    <!-- Main canvas -->
+    <div class="flex flex-col gap-3">
+      <div class="panel p-2">
+        <canvas id="mainCanvas" width="600" height="380" class="rounded"></canvas>
+      </div>
+      <div class="panel p-2">
+        <canvas id="profileCanvas" width="600" height="90" class="rounded"></canvas>
+      </div>
+    </div>
+
+    <!-- Controls -->
+    <div class="flex flex-col gap-4 w-full lg:w-72">
+      <div class="panel p-4">
+        <h2 class="text-base font-semibold text-indigo-200 border-b border-indigo-900 pb-2 mb-3">パラメーター設定</h2>
+
+        <div class="mb-3">
+          <label class="block text-sm mb-1 text-indigo-300">波長 λ = <span id="lambdaVal">550</span> nm</label>
+          <div id="lambdaBar" class="wavelength-bar mb-1" style="background: #88ff44"></div>
+          <input type="range" id="sliderLambda" min="380" max="780" step="5" value="550">
+        </div>
+        <div class="mb-3">
+          <label class="block text-sm mb-1 text-indigo-300">スリット間隔 d = <span id="dVal">0.5</span> mm</label>
+          <input type="range" id="sliderD" min="0.1" max="2.0" step="0.05" value="0.5">
+        </div>
+        <div class="mb-3">
+          <label class="block text-sm mb-1 text-indigo-300">スクリーン距離 L = <span id="lVal">1.0</span> m</label>
+          <input type="range" id="sliderL" min="0.5" max="2.0" step="0.05" value="1.0">
+        </div>
+        <div class="mb-3">
+          <label class="block text-sm mb-1 text-indigo-300">スリット幅 a = <span id="aVal">0.1</span> mm</label>
+          <input type="range" id="sliderA" min="0.02" max="0.5" step="0.01" value="0.1">
+        </div>
+        <div class="mb-2 flex items-center gap-2">
+          <input type="checkbox" id="showSingle" checked class="accent-indigo-500">
+          <label class="text-sm text-indigo-300">単スリットエンベロープ表示</label>
+        </div>
+        <div class="flex items-center gap-2">
+          <input type="checkbox" id="showDouble" checked class="accent-indigo-500">
+          <label class="text-sm text-indigo-300">二重スリット縞表示</label>
+        </div>
+      </div>
+
+      <div class="panel p-4 text-xs text-indigo-400 leading-relaxed">
+        <div class="font-semibold text-indigo-300 mb-2 text-sm">干渉縞の計算式</div>
+        <p class="mb-1"><strong class="text-white">二重スリット強度:</strong></p>
+        <p class="mb-2 font-mono text-xs">I = cos²(πdy/λL) × sinc²(πay/λL)</p>
+        <p class="mb-1"><strong class="text-white">明線条件:</strong></p>
+        <p class="mb-2 font-mono text-xs">d·sinθ = mλ (m = 0, ±1, ±2...)</p>
+        <p class="mb-1"><strong class="text-white">縞間隔 Δy:</strong></p>
+        <p class="font-mono text-xs">Δy = λL / d</p>
+      </div>
+
+      <div class="panel p-3">
+        <div class="text-xs text-indigo-400 font-semibold mb-2">現在の縞間隔</div>
+        <div id="fringeSpacing" class="text-lg font-bold text-white"></div>
+        <div class="text-xs text-indigo-500 mt-1">Δy = λL / d</div>
+      </div>
+    </div>
+  </div>
+
+<script>
+const mainCanvas = document.getElementById('mainCanvas');
+const mctx = mainCanvas.getContext('2d');
+const profCanvas = document.getElementById('profileCanvas');
+const pctx = profCanvas.getContext('2d');
+const MW = mainCanvas.width, MH = mainCanvas.height;
+const PW = profCanvas.width, PH = profCanvas.height;
+
+function wavelengthToRGB(wl) {
+  let r=0, g=0, b=0;
+  if (wl >= 380 && wl < 440) { r = -(wl-440)/(440-380); b = 1; }
+  else if (wl >= 440 && wl < 490) { g = (wl-440)/(490-440); b = 1; }
+  else if (wl >= 490 && wl < 510) { g = 1; b = -(wl-510)/(510-490); }
+  else if (wl >= 510 && wl < 580) { r = (wl-510)/(580-510); g = 1; }
+  else if (wl >= 580 && wl < 645) { r = 1; g = -(wl-645)/(645-580); }
+  else if (wl >= 645 && wl <= 780) { r = 1; }
+  let factor = 1.0;
+  if (wl < 420) factor = 0.3 + 0.7*(wl-380)/(420-380);
+  else if (wl > 700) factor = 0.3 + 0.7*(780-wl)/(780-700);
+  return [Math.round(r*factor*255), Math.round(g*factor*255), Math.round(b*factor*255)];
+}
+
+function sinc(x) {
+  if (Math.abs(x) < 1e-9) return 1;
+  return Math.sin(x) / x;
+}
+
+let lambda = 550e-9; // m
+let d = 0.5e-3;      // m
+let L = 1.0;         // m
+let a = 0.1e-3;      // m
+
+function computeIntensity(y, useDouble, useSingle) {
+  const phase_double = Math.PI * d * y / (lambda * L);
+  const phase_single = Math.PI * a * y / (lambda * L);
+  const double_part = useDouble ? Math.cos(phase_double) ** 2 : 1;
+  const single_part = useSingle ? sinc(phase_single) ** 2 : 1;
+  return double_part * single_part;
+}
+
+function render() {
+  const showSingle = document.getElementById('showSingle').checked;
+  const showDouble = document.getElementById('showDouble').checked;
+  const [wr, wg, wb] = wavelengthToRGB(lambda*1e9);
+
+  // Main canvas - interference pattern as 2D image
+  const imgData = mctx.createImageData(MW, MH);
+  const data = imgData.data;
+  const yRange = 10e-3; // ±5mm on screen
+
+  for (let py = 0; py < MH; py++) {
+    const y = ((py / MH) - 0.5) * yRange * 2;
+    // Double slit intensity
+    const I_double = showDouble ? Math.cos(Math.PI*d*y/(lambda*L))**2 : 1;
+    const I_single = showSingle ? sinc(Math.PI*a*y/(lambda*L))**2 : 1;
+    const I = I_double * I_single;
+
+    for (let px = 0; px < MW; px++) {
+      // Create gradient from center
+      const xFrac = Math.abs(px - MW/2) / (MW/2);
+      const brightnessScale = Math.max(0, 1 - xFrac * 0.3);
+      const brightness = I * brightnessScale;
+      const idx = (py * MW + px) * 4;
+      data[idx]   = Math.round(wr * brightness);
+      data[idx+1] = Math.round(wg * brightness);
+      data[idx+2] = Math.round(wb * brightness);
+      data[idx+3] = 255;
+    }
+  }
+  mctx.putImageData(imgData, 0, 0);
+
+  // Draw slit diagram overlay
+  mctx.fillStyle = 'rgba(0,0,0,0.7)';
+  mctx.fillRect(0, MH - 60, MW, 60);
+  mctx.strokeStyle = '#3344aa';
+  mctx.lineWidth = 1;
+  mctx.setLineDash([3,3]);
+  mctx.beginPath(); mctx.moveTo(MW/2, 0); mctx.lineTo(MW/2, MH-60); mctx.stroke();
+  mctx.setLineDash([]);
+
+  // Labels
+  mctx.fillStyle = '#8899dd';
+  mctx.font = '11px monospace';
+  mctx.fillText(`λ=${(lambda*1e9).toFixed(0)}nm  d=${(d*1e3).toFixed(2)}mm  L=${L.toFixed(1)}m`, 10, MH-40);
+  mctx.fillStyle = '#5566cc';
+  mctx.font = '10px monospace';
+  mctx.fillText(`縞間隔 Δy = λL/d = ${(lambda*L/d*1000).toFixed(2)} mm`, 10, MH-25);
+  mctx.fillText('+5mm', MW-45, 15);
+  mctx.fillText('-5mm', MW-45, MH-65);
+
+  // Profile canvas
+  pctx.fillStyle = '#060610';
+  pctx.fillRect(0, 0, PW, PH);
+  const PAD = 30;
+
+  // Single slit envelope (red dashed)
+  if (showSingle) {
+    pctx.strokeStyle = 'rgba(255,100,100,0.5)';
+    pctx.lineWidth = 1.5;
+    pctx.setLineDash([4,3]);
+    pctx.beginPath();
+    for (let px = 0; px < PW; px++) {
+      const y = ((px / PW) - 0.5) * yRange * 2;
+      const I = sinc(Math.PI*a*y/(lambda*L))**2;
+      const py2 = PAD + (1 - I) * (PH - PAD - 10);
+      if (px === 0) pctx.moveTo(px, py2); else pctx.lineTo(px, py2);
+    }
+    pctx.stroke();
+    pctx.setLineDash([]);
+  }
+
+  // Double slit pattern
+  if (showDouble) {
+    pctx.strokeStyle = `rgb(${wr},${wg},${wb})`;
+    pctx.lineWidth = 2;
+    pctx.beginPath();
+    for (let px = 0; px < PW; px++) {
+      const y = ((px / PW) - 0.5) * yRange * 2;
+      const I_d = Math.cos(Math.PI*d*y/(lambda*L))**2;
+      const I_s = showSingle ? sinc(Math.PI*a*y/(lambda*L))**2 : 1;
+      const I = I_d * I_s;
+      const py2 = PAD + (1-I) * (PH - PAD - 10);
+      if (px === 0) pctx.moveTo(px, py2); else pctx.lineTo(px, py2);
+    }
+    pctx.stroke();
+  }
+
+  // Axis
+  pctx.strokeStyle = '#223355';
+  pctx.lineWidth = 1;
+  pctx.beginPath(); pctx.moveTo(0, PAD-2); pctx.lineTo(PW, PAD-2); pctx.stroke();
+  pctx.fillStyle = '#445577';
+  pctx.font = '9px sans-serif';
+  pctx.fillText('強度プロファイル', 5, 12);
+  pctx.fillStyle = '#cc5555';
+  pctx.fillText('--- 単スリット包絡線', PW-120, 12);
+
+  // Fringe spacing display
+  const fringeSpacingMM = (lambda * L / d * 1000).toFixed(2);
+  document.getElementById('fringeSpacing').textContent = fringeSpacingMM + ' mm';
+}
+
+function updateLambdaBar() {
+  const wl = lambda * 1e9;
+  const [r, g, b] = wavelengthToRGB(wl);
+  document.getElementById('lambdaBar').style.background = `rgb(${r},${g},${b})`;
+}
+
+document.getElementById('sliderLambda').addEventListener('input', e => {
+  lambda = parseFloat(e.target.value) * 1e-9;
+  document.getElementById('lambdaVal').textContent = (lambda*1e9).toFixed(0);
+  updateLambdaBar();
+  render();
+});
+document.getElementById('sliderD').addEventListener('input', e => {
+  d = parseFloat(e.target.value) * 1e-3;
+  document.getElementById('dVal').textContent = parseFloat(e.target.value).toFixed(2);
+  render();
+});
+document.getElementById('sliderL').addEventListener('input', e => {
+  L = parseFloat(e.target.value);
+  document.getElementById('lVal').textContent = L.toFixed(1);
+  render();
+});
+document.getElementById('sliderA').addEventListener('input', e => {
+  a = parseFloat(e.target.value) * 1e-3;
+  document.getElementById('aVal').textContent = parseFloat(e.target.value).toFixed(2);
+  render();
+});
+document.getElementById('showSingle').addEventListener('change', render);
+document.getElementById('showDouble').addEventListener('change', render);
+
+updateLambdaBar();
+render();
+</script>
+</body>
+</html>
